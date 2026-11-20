@@ -45,11 +45,12 @@ class VQFAHRS
     bool accl_in_g;                         ///< 加速度计单位是否为 g（true: g，false: m/s^2）
     float tau_acc;                          ///< 加速度计低通滤波时间常数 [s]
     uint32_t task_stack_depth;              ///< 线程栈深 Thread stack depth
+    const char* command_name = "ahrs";      ///< RamFS 命令名，同一目录下须唯一。
   };
 
   /**
-   * @brief 构造 VQFAHRS，创建发布 Topic，注册 `ahrs` 命令并创建 `ahrs` 线程。
-   *        Construct VQFAHRS, create the published Topics, register the `ahrs`
+   * @brief 构造 VQFAHRS，创建发布 Topic，注册 RamFS 命令并创建 `ahrs` 线程。
+   *        Construct VQFAHRS, create the published Topics, register the RamFS
    *        command and create the `ahrs` thread.
    *
    *        其余 VQF 算法参数（零偏估计、静止检测等）为模块内部编译期常量，
@@ -58,8 +59,8 @@ class VQFAHRS
    *        etc.) are compile-time constants inside the module; see the private
    *        kBias* / kRest* constants for their values.
    *
-   * @param ramfs 接收 `ahrs` 命令的 RamFS。
-   *              RamFS that receives the `ahrs` command.
+   * @param ramfs 接收模块命令的 RamFS。
+   *              RamFS that receives the module command.
    * @param param 构造参数。
    *              Construction parameters.
    */
@@ -70,7 +71,8 @@ class VQFAHRS
                                 .euler_topic_name = "ahrs_euler",
                                 .accl_in_g = true,
                                 .tau_acc = 3.0f,
-                                .task_stack_depth = 2048})
+                                .task_stack_depth = 2048,
+                                .command_name = "ahrs"})
       : param_(param),
         gyro_topic_name_(param.gyro_topic_name),
         accl_topic_name_(param.accl_topic_name),
@@ -78,7 +80,7 @@ class VQFAHRS
             param.quaternion_topic_name)),
         euler_topic_(
             LibXR::Topic::CreateTopic<decltype(euler_)>(param.euler_topic_name)),
-        cmd_file_(LibXR::RamFS::CreateFile("ahrs", CommandFunc, this))
+        cmd_file_(LibXR::RamFS::CreateFile(param.command_name, CommandFunc, this))
   {
     gyr_ts_ = 0.001f;
     acc_ts_ = gyr_ts_;

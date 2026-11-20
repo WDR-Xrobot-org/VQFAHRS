@@ -32,6 +32,7 @@ VQFAHRS(LibXR::RamFS& ramfs, const Param& param = {...});
   * `tau_acc`（默认 `3.0f`）：加速度计低通滤波时间常数（秒），主要可调的算法参数。
 
   * `task_stack_depth`（默认 `2048`）：`ahrs` 线程栈深（字节）。
+  * `command_name`（默认 `"ahrs"`）：RamFS 调试命令名。同目录下各模块的命令名须唯一。
 
 其余 VQF 算法参数（陀螺仪/加速度计采样周期自动锁存、运动与静止阶段零偏估计、静止检测阈值等）为模块内部编译期常量（取值：零偏估计与静止检测均启用，`bias_sigma_init=0.5 deg/s`、`bias_forgetting_time=100 s`、`bias_clip=2.0 deg/s`、`bias_sigma_motion=0.1 deg/s`、`bias_vertical_forgetting_factor=1e-4`、`bias_sigma_rest=0.03 deg/s`、`rest_min_t=1.5 s`、`rest_filter_tau=0.5 s`、`rest_th_gyr=2.0 deg/s`、`rest_th_acc=0.5 m/s²`），不对外配置。
 
@@ -60,6 +61,7 @@ modules:
           accl_in_g: true
           tau_acc: 3.0
           task_stack_depth: 2048
+          command_name: "ahrs"
 
 ```
 
