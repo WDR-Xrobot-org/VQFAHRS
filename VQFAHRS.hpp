@@ -43,21 +43,7 @@ class VQFAHRS
     const char* quaternion_topic_name;      ///< 四元数 Topic 名称 Quaternion Topic name
     const char* euler_topic_name;           ///< 欧拉角 Topic 名称 Euler angle Topic name
     bool accl_in_g;                         ///< 加速度计单位是否为 g（true: g，false: m/s^2）
-    float gyr_ts;                           ///< 陀螺仪标称采样周期 [s]（<=0 时由时间戳自动锁存）
-    float acc_ts;                           ///< 加速度计标称采样周期 [s]（<=0 时与陀螺仪同步或自动锁存）
     float tau_acc;                          ///< 加速度计低通滤波时间常数 [s]
-    bool motion_bias_est_enabled;           ///< 是否启用运动阶段陀螺仪零偏估计
-    bool rest_bias_est_enabled;             ///< 是否启用静止检测与静止阶段零偏估计
-    float bias_sigma_init;                  ///< 初始零偏估计不确定度标准差 [deg/s]
-    float bias_forgetting_time;             ///< 零偏不确定度从 0 增至 0.1 deg/s 的时间 [s]
-    float bias_clip;                        ///< 最大预期陀螺仪零偏 [deg/s]
-    float bias_sigma_motion;                ///< 运动阶段收敛零偏不确定度 [deg/s]
-    float bias_vertical_forgetting_factor;  ///< 垂直方向不可观零偏遗忘因子
-    float bias_sigma_rest;                  ///< 静止阶段收敛零偏不确定度 [deg/s]
-    float rest_min_t;                       ///< 判定静止的最短持续时间 [s]
-    float rest_filter_tau;                  ///< 静止检测低通滤波时间常数 [s]
-    float rest_th_gyr;                      ///< 静止检测陀螺仪阈值 [deg/s]
-    float rest_th_acc;                      ///< 静止检测加速度计阈值 [m/s^2]
     uint32_t task_stack_depth;              ///< 线程栈深 Thread stack depth
   };
 
@@ -65,6 +51,12 @@ class VQFAHRS
    * @brief 构造 VQFAHRS，创建发布 Topic，注册 `ahrs` 命令并创建 `ahrs` 线程。
    *        Construct VQFAHRS, create the published Topics, register the `ahrs`
    *        command and create the `ahrs` thread.
+   *
+   *        其余 VQF 算法参数（零偏估计、静止检测等）为模块内部编译期常量，
+   *        取值见私有常量 kBias* / kRest*。
+   *        Remaining VQF algorithm parameters (bias estimation, rest detection,
+   *        etc.) are compile-time constants inside the module; see the private
+   *        kBias* / kRest* constants for their values.
    *
    * @param ramfs 接收 `ahrs` 命令的 RamFS。
    *              RamFS that receives the `ahrs` command.
@@ -77,21 +69,7 @@ class VQFAHRS
                                 .quaternion_topic_name = "ahrs_quaternion",
                                 .euler_topic_name = "ahrs_euler",
                                 .accl_in_g = true,
-                                .gyr_ts = 0.0f,
-                                .acc_ts = 0.0f,
                                 .tau_acc = 3.0f,
-                                .motion_bias_est_enabled = true,
-                                .rest_bias_est_enabled = true,
-                                .bias_sigma_init = 0.5f,
-                                .bias_forgetting_time = 100.0f,
-                                .bias_clip = 2.0f,
-                                .bias_sigma_motion = 0.1f,
-                                .bias_vertical_forgetting_factor = 0.0001f,
-                                .bias_sigma_rest = 0.03f,
-                                .rest_min_t = 1.5f,
-                                .rest_filter_tau = 0.5f,
-                                .rest_th_gyr = 2.0f,
-                                .rest_th_acc = 0.5f,
                                 .task_stack_depth = 2048})
       : param_(param),
         gyro_topic_name_(param.gyro_topic_name),
@@ -102,10 +80,10 @@ class VQFAHRS
             LibXR::Topic::CreateTopic<decltype(euler_)>(param.euler_topic_name)),
         cmd_file_(LibXR::RamFS::CreateFile("ahrs", CommandFunc, this))
   {
-    gyr_ts_ = (param_.gyr_ts > 0.0f) ? param_.gyr_ts : 0.001f;
-    acc_ts_ = (param_.acc_ts > 0.0f) ? param_.acc_ts : gyr_ts_;
-    gyr_ts_locked_ = (param_.gyr_ts > 0.0f);
-    acc_ts_locked_ = (param_.acc_ts > 0.0f);
+    gyr_ts_ = 0.001f;
+    acc_ts_ = gyr_ts_;
+    gyr_ts_locked_ = false;
+    acc_ts_locked_ = false;
     Setup();
 
     ramfs.Add(cmd_file_);
@@ -329,9 +307,9 @@ class VQFAHRS
    */
   void GetRelativeRestDeviations(float out[2]) const
   {
-    float gyr_th = param_.rest_th_gyr * (kPi / 180.0f);
+    float gyr_th = kRestThGyr * (kPi / 180.0f);
     out[0] = std::sqrt(rest_last_squared_dev_[0]) / std::max(gyr_th, kEps);
-    out[1] = std::sqrt(rest_last_squared_dev_[1]) / std::max(param_.rest_th_acc, kEps);
+    out[1] = std::sqrt(rest_last_squared_dev_[1]) / std::max(kRestThAcc, kEps);
   }
 
  private:
@@ -341,13 +319,28 @@ class VQFAHRS
   static constexpr float kEps = 1.1920929e-7f;
   static constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
+  // VQF 算法参数（编译期常量，取值为原 Param 默认值，不对外配置）。
+  // VQF algorithm parameters as compile-time constants (former Param defaults).
+  static constexpr bool kMotionBiasEstEnabled = true;   ///< 运动阶段零偏估计
+  static constexpr bool kRestBiasEstEnabled = true;     ///< 静止检测与静止零偏估计
+  static constexpr float kBiasSigmaInit = 0.5f;         ///< 初始零偏不确定度 [deg/s]
+  static constexpr float kBiasForgettingTime = 100.0f;  ///< 零偏遗忘时间 [s]
+  static constexpr float kBiasClip = 2.0f;              ///< 最大零偏 [deg/s]
+  static constexpr float kBiasSigmaMotion = 0.1f;       ///< 运动阶段收敛零偏不确定度 [deg/s]
+  static constexpr float kBiasVerticalForgettingFactor = 0.0001f;  ///< 垂直不可观遗忘因子
+  static constexpr float kBiasSigmaRest = 0.03f;        ///< 静止阶段收敛零偏不确定度 [deg/s]
+  static constexpr float kRestMinT = 1.5f;              ///< 判定静止的最短时间 [s]
+  static constexpr float kRestFilterTau = 0.5f;         ///< 静止检测低通时间常数 [s]
+  static constexpr float kRestThGyr = 2.0f;             ///< 静止检测陀螺仪阈值 [deg/s]
+  static constexpr float kRestThAcc = 0.5f;             ///< 静止检测加速度计阈值 [m/s^2]
+
   static inline float Square(float x) { return x * x; }
 
   void Setup()
   {
     FilterCoeffs(param_.tau_acc, acc_ts_, acc_lp_b_, acc_lp_a_);
-    FilterCoeffs(param_.rest_filter_tau, gyr_ts_, rest_gyr_lp_b_, rest_gyr_lp_a_);
-    FilterCoeffs(param_.rest_filter_tau, acc_ts_, rest_acc_lp_b_, rest_acc_lp_a_);
+    FilterCoeffs(kRestFilterTau, gyr_ts_, rest_gyr_lp_b_, rest_gyr_lp_a_);
+    FilterCoeffs(kRestFilterTau, acc_ts_, rest_acc_lp_b_, rest_acc_lp_a_);
 
     SetupBiasCoeffs();
     ResetState();
@@ -356,15 +349,15 @@ class VQFAHRS
   void SetupBiasCoeffs()
   {
     // Scaled by 100^2 (0.01 deg/s units) for numerical stability in single-precision float
-    bias_p0_ = Square(param_.bias_sigma_init * 100.0f);
-    bias_v_ = Square(0.1f * 100.0f) * acc_ts_ / std::max(param_.bias_forgetting_time, 1e-6f);
+    bias_p0_ = Square(kBiasSigmaInit * 100.0f);
+    bias_v_ = Square(0.1f * 100.0f) * acc_ts_ / std::max(kBiasForgettingTime, 1e-6f);
 
-    float p_motion = Square(param_.bias_sigma_motion * 100.0f);
+    float p_motion = Square(kBiasSigmaMotion * 100.0f);
     bias_motion_w_ = Square(p_motion) / bias_v_ + p_motion;
     bias_vertical_w_ =
-        bias_motion_w_ / std::max(param_.bias_vertical_forgetting_factor, 1e-10f);
+        bias_motion_w_ / std::max(kBiasVerticalForgettingFactor, 1e-10f);
 
-    float p_rest = Square(param_.bias_sigma_rest * 100.0f);
+    float p_rest = Square(kBiasSigmaRest * 100.0f);
     bias_rest_w_ = Square(p_rest) / bias_v_ + p_rest;
   }
 
@@ -374,7 +367,7 @@ class VQFAHRS
     std::copy(rest_gyr_lp_b_, rest_gyr_lp_b_ + 3, old_b);
     std::copy(rest_gyr_lp_a_, rest_gyr_lp_a_ + 2, old_a);
     gyr_ts_ = new_ts;
-    FilterCoeffs(param_.rest_filter_tau, gyr_ts_, rest_gyr_lp_b_, rest_gyr_lp_a_);
+    FilterCoeffs(kRestFilterTau, gyr_ts_, rest_gyr_lp_b_, rest_gyr_lp_a_);
     FilterAdaptStateForCoeffChange(rest_last_gyr_lp_, 3, old_b, old_a, rest_gyr_lp_b_,
                                    rest_gyr_lp_a_, rest_gyr_lp_state_.data());
   }
@@ -391,7 +384,7 @@ class VQFAHRS
 
     acc_ts_ = new_ts;
     FilterCoeffs(param_.tau_acc, acc_ts_, acc_lp_b_, acc_lp_a_);
-    FilterCoeffs(param_.rest_filter_tau, acc_ts_, rest_acc_lp_b_, rest_acc_lp_a_);
+    FilterCoeffs(kRestFilterTau, acc_ts_, rest_acc_lp_b_, rest_acc_lp_a_);
     SetupBiasCoeffs();
 
     FilterAdaptStateForCoeffChange(last_acc_lp_, 3, old_acc_b, old_acc_a, acc_lp_b_,
@@ -404,17 +397,17 @@ class VQFAHRS
   void UpdateGyr(const float gyr[3], float dt)
   {
     // Rest detection (gyroscope part)
-    if (param_.rest_bias_est_enabled)
+    if (kRestBiasEstEnabled)
     {
-      FilterVec(gyr, 3, param_.rest_filter_tau, gyr_ts_, rest_gyr_lp_b_, rest_gyr_lp_a_,
+      FilterVec(gyr, 3, kRestFilterTau, gyr_ts_, rest_gyr_lp_b_, rest_gyr_lp_a_,
                 rest_gyr_lp_state_.data(), rest_last_gyr_lp_);
 
       rest_last_squared_dev_[0] = Square(gyr[0] - rest_last_gyr_lp_[0]) +
                                   Square(gyr[1] - rest_last_gyr_lp_[1]) +
                                   Square(gyr[2] - rest_last_gyr_lp_[2]);
 
-      float bias_clip = param_.bias_clip * (kPi / 180.0f);
-      if (rest_last_squared_dev_[0] >= Square(param_.rest_th_gyr * (kPi / 180.0f)) ||
+      float bias_clip = kBiasClip * (kPi / 180.0f);
+      if (rest_last_squared_dev_[0] >= Square(kRestThGyr * (kPi / 180.0f)) ||
           std::fabs(rest_last_gyr_lp_[0]) > bias_clip ||
           std::fabs(rest_last_gyr_lp_[1]) > bias_clip ||
           std::fabs(rest_last_gyr_lp_[2]) > bias_clip)
@@ -450,16 +443,16 @@ class VQFAHRS
     }
 
     // Rest detection (accelerometer part)
-    if (param_.rest_bias_est_enabled)
+    if (kRestBiasEstEnabled)
     {
-      FilterVec(acc, 3, param_.rest_filter_tau, acc_ts_, rest_acc_lp_b_, rest_acc_lp_a_,
+      FilterVec(acc, 3, kRestFilterTau, acc_ts_, rest_acc_lp_b_, rest_acc_lp_a_,
                 rest_acc_lp_state_.data(), rest_last_acc_lp_);
 
       rest_last_squared_dev_[1] = Square(acc[0] - rest_last_acc_lp_[0]) +
                                   Square(acc[1] - rest_last_acc_lp_[1]) +
                                   Square(acc[2] - rest_last_acc_lp_[2]);
 
-      if (rest_last_squared_dev_[1] >= Square(param_.rest_th_acc))
+      if (rest_last_squared_dev_[1] >= Square(kRestThAcc))
       {
         rest_t_ = 0.0f;
         rest_detected_ = false;
@@ -467,7 +460,7 @@ class VQFAHRS
       else
       {
         rest_t_ += acc_ts_;
-        if (rest_t_ >= param_.rest_min_t)
+        if (rest_t_ >= kRestMinT)
         {
           rest_detected_ = true;
         }
@@ -511,9 +504,9 @@ class VQFAHRS
         std::acos(std::clamp(acc_earth[2], -1.0f, 1.0f)) / acc_ts_;
 
     // Full VQF Kalman-filter gyroscope bias estimation (motion + rest)
-    if (param_.motion_bias_est_enabled || param_.rest_bias_est_enabled)
+    if (kMotionBiasEstEnabled || kRestBiasEstEnabled)
     {
-      float bias_clip = param_.bias_clip * (kPi / 180.0f);
+      float bias_clip = kBiasClip * (kPi / 180.0f);
 
       float acc_gyr_quat[4];
       float R[9];
@@ -544,7 +537,7 @@ class VQFAHRS
       // Measurement error and noise covariance for Kalman update
       float w[3];
       float e[3];
-      if (rest_detected_ && param_.rest_bias_est_enabled)
+      if (rest_detected_ && kRestBiasEstEnabled)
       {
         e[0] = rest_last_gyr_lp_[0] - bias_[0];
         e[1] = rest_last_gyr_lp_[1] - bias_[1];
@@ -554,7 +547,7 @@ class VQFAHRS
         w[1] = bias_rest_w_;
         w[2] = bias_rest_w_;
       }
-      else if (param_.motion_bias_est_enabled)
+      else if (kMotionBiasEstEnabled)
       {
         e[0] = -acc_earth[1] / acc_ts_ + bias_lp[0] - R[0] * bias_[0] -
                R[1] * bias_[1] - R[2] * bias_[2];

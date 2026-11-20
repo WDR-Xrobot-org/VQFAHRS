@@ -29,17 +29,11 @@ VQFAHRS(LibXR::RamFS& ramfs, const Param& param = {...});
 
   * `accl_in_g`（默认 `true`）：输入加速度计单位是否为 `g`（`false` 表示 `m/s²`）。
 
-  * `gyr_ts`（默认 `0.0f`）：陀螺仪标称采样周期（秒），`<= 0` 时由首次有效时间戳差自动锁存。
-
-  * `acc_ts`（默认 `0.0f`）：加速度计标称采样周期（秒），`<= 0` 时与陀螺仪同步或自动锁存（原生支持异频采样）。
-
-  * `tau_acc`（默认 `3.0f`）：加速度计低通滤波时间常数（秒）。
-
-  * `motion_bias_est_enabled`（默认 `true`）：是否启用运动阶段零偏估计。
-
-  * `rest_bias_est_enabled`（默认 `true`）：是否启用静止检测与静止阶段零偏估计。
+  * `tau_acc`（默认 `3.0f`）：加速度计低通滤波时间常数（秒），主要可调的算法参数。
 
   * `task_stack_depth`（默认 `2048`）：`ahrs` 线程栈深（字节）。
+
+其余 VQF 算法参数（陀螺仪/加速度计采样周期自动锁存、运动与静止阶段零偏估计、静止检测阈值等）为模块内部编译期常量（取值：零偏估计与静止检测均启用，`bias_sigma_init=0.5 deg/s`、`bias_forgetting_time=100 s`、`bias_clip=2.0 deg/s`、`bias_sigma_motion=0.1 deg/s`、`bias_vertical_forgetting_factor=1e-4`、`bias_sigma_rest=0.03 deg/s`、`rest_min_t=1.5 s`、`rest_filter_tau=0.5 s`、`rest_th_gyr=2.0 deg/s`、`rest_th_acc=0.5 m/s²`），不对外配置。
 
 ## 3. Topic
 
@@ -54,7 +48,7 @@ VQFAHRS(LibXR::RamFS& ramfs, const Param& param = {...});
 
 ```
 modules:
-  - module: your-github-username/VQFAHRS
+  - module: WDR-Xrobot-org/VQFAHRS
     id: ahrs
     args:
       - ramfs: ramfs
@@ -64,11 +58,7 @@ modules:
           quaternion_topic_name: "ahrs_quaternion"
           euler_topic_name: "ahrs_euler"
           accl_in_g: true
-          gyr_ts: 0.0
-          acc_ts: 0.0
           tau_acc: 3.0
-          motion_bias_est_enabled: true
-          rest_bias_est_enabled: true
           task_stack_depth: 2048
 
 ```
